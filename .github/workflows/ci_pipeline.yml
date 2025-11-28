@@ -3,9 +3,9 @@ name: Microservices CI Pipeline
 # 1. Триггер: Запускать на любой Push в ветку main или master
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
 
 # 2. Задачи (Jobs)
 jobs:
