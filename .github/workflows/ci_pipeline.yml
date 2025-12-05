@@ -27,6 +27,11 @@ jobs:
           sudo apt-get update
           sudo ACCEPT_EULA=Y apt-get install -y msodbcsql17 unixodbc-dev
 
+      - name: Install mssql-tools
+        run: |
+          sudo ACCEPT_EULA=Y apt-get install -y mssql-tools
+          echo 'export PATH="$PATH:/opt/mssql-tools/bin"' >> $GITHUB_ENV
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -38,7 +43,7 @@ jobs:
       - name: Wait for SQL Server
         run: sleep 15
 
-      - name: Create Database
+      - name: Create Database and Table
         run: |
           /opt/mssql-tools/bin/sqlcmd -S 127.0.0.1 -U sa -P TestPass123! -Q "CREATE DATABASE MicroshopGVM"
           /opt/mssql-tools/bin/sqlcmd -S 127.0.0.1 -d MicroshopGVM -U sa -P TestPass123! -Q "CREATE TABLE Orders (id INT PRIMARY KEY IDENTITY(1,1), product_id INT, customer_id INT, quantity INT)"
