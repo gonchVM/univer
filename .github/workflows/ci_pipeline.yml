@@ -1,53 +1,53 @@
-name: CI with Database
+name: CI/CD Pipeline (Test & Release)
 
-on: [push, pull_request]
+# Триггеры:
+# 1. На пуш в main (просто тесты)
+# 2. На создание тега v* (тесты + релиз)
+on:
+  push:
+    branches: ["main"]
+    tags:
+      - 'v*'  # Срабатывает на v1.0, v2.3.4 и т.д.
+  pull_request:
+    branches: ["main"]
 
 jobs:
-  integration-test:
+  # --- РАБОТА 1: ТЕСТИРОВАНИЕ ---
+  tests:
     runs-on: ubuntu-latest
-
-    # Запускаем сервисный контейнер SQL Server
     services:
       sqlserver:
         image: mcr.microsoft.com/mssql/server:2019-latest
-        ports:
-          - 1433:1433
+        ports: [1433:1433]
         env:
           ACCEPT_EULA: Y
           SA_PASSWORD: TestPass123!
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: Install ODBC Driver (Linux)
+      # Установка драйверов с авто-определением версии Ubuntu
+      - name: Install ODBC & Python
         run: |
           curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
-          curl https://packages.microsoft.com/config/ubuntu/20.04/prod.list | sudo tee /etc/apt/sources.list.d/msprod.list
+          curl https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list | sudo tee /etc/apt/sources.list.d/msprod.list
           sudo apt-get update
           sudo ACCEPT_EULA=Y apt-get install -y msodbcsql17 unixodbc-dev
 
-      - name: Install mssql-tools
-        run: |
-          sudo ACCEPT_EULA=Y apt-get install -y mssql-tools
-          echo 'export PATH="$PATH:/opt/mssql-tools/bin"' >> $GITHUB_ENV
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: "3.9"
 
-      - name: Install Dependencies
-        run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt
 
-      - name: Wait for SQL Server
-        run: sleep 15
-
-      - name: Create Database and Table
+      # Инициализация БД
+      - name: Wait & Init DB
         run: |
+          sleep 15
           /opt/mssql-tools/bin/sqlcmd -S 127.0.0.1 -U sa -P TestPass123! -Q "CREATE DATABASE MicroshopGVM"
           /opt/mssql-tools/bin/sqlcmd -S 127.0.0.1 -d MicroshopGVM -U sa -P TestPass123! -Q "CREATE TABLE Orders (id INT PRIMARY KEY IDENTITY(1,1), product_id INT, customer_id INT, quantity INT)"
 
+      # Запуск тестов с передачей секретов
       - name: Run Tests
         env:
           DB_SERVER: 127.0.0.1
@@ -55,3 +55,32 @@ jobs:
           DB_USER: sa
           DB_PASSWORD: TestPass123!
         run: pytest tests/
+
+  # --- РАБОТА 2: СБОРКА И РЕЛИЗ ---
+  build-and-release:
+    needs: tests  # Ждем, пока пройдут тесты!
+    runs-on: ubuntu-latest
+    # Запускать этот блок ТОЛЬКО если это тег версии (например, v1.0)
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      # 1. Запускаем ваш Python-скрипт сборки
+      - name: Build Package
+        run: python build_package.py
+
+      # 2. Создаем Релиз на GitHub и прикрепляем ZIP
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          # Ищем любой ZIP файл, начинающийся с microshop_release_
+          files: microshop_release_*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
