@@ -75,7 +75,7 @@ jobs:
       - name: Build Package
         run: python build_package.py
 
-      # 2. Создаем Релиз на GitHub и прикрепляем ZIP
+      # 2. Создаем Релиз на GitHub и прикрепляем ZIP gfgd
       - name: Create Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
