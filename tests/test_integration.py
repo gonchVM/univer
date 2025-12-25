@@ -33,3 +33,4 @@ def test_create_order(client):
     resp = client.post('/orders', json={"product_id": 1, "customer_id": 1, "quantity": 10})
     assert resp.status_code == 201
     assert resp.json['id'] > 0
+    assert resp.json.get('status') == 'New'

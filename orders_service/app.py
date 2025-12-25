@@ -1,74 +1,73 @@
 import os
-import pyodbc
 from flask import Flask, jsonify, request
 from flasgger import Swagger
 from dotenv import load_dotenv
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import text
 
-# Загружаем настройки из .env (если он есть)
 load_dotenv()
 
 app = Flask(__name__)
-# Настройка Swagger (авто-документация)
 app.config['SWAGGER'] = {'title': 'Orders Service API', 'uiversion': 3}
 swagger = Swagger(app)
 
+# --- НАСТРОЙКА ПОДКЛЮЧЕНИЯ (SQLAlchemy) ---
+server = os.getenv('DB_SERVER', 'localhost')
+database = os.getenv('DB_DATABASE', 'MicroshopGVM')
+username = os.getenv('DB_USER')
+password = os.getenv('DB_PASSWORD')
 
-def get_db_connection():
-    """Умное подключение к БД"""
-    server = os.getenv('DB_SERVER', 'localhost')
-    database = os.getenv('DB_DATABASE', 'MicroshopGVM')
-    username = os.getenv('DB_USER')
-    password = os.getenv('DB_PASSWORD')
+# Формируем строку подключения для SQLAlchemy
+if username and password:
+    # Для GitHub Actions
+    conn_str = f'mssql+pyodbc://{username}:{password}@{server}/{database}?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes'
+else:
+    # Для Локального ПК (Windows Auth)
+    conn_str = f'mssql+pyodbc://@{server}/{database}?driver=ODBC+Driver+17+for+SQL+Server&Trusted_Connection=yes&TrustServerCertificate=yes'
 
-    if username and password:
-        # Режим 1: Для GitHub Actions (с паролем)
-        conn_str = (
-            f'DRIVER={{ODBC Driver 17 for SQL Server}};'
-            f'SERVER={server};DATABASE={database};'
-            f'UID={username};PWD={password};'
-            f'TrustServerCertificate=yes;'
-        )
-    else:
-        # Режим 2: Локальный (Windows Auth, без пароля)
-        conn_str = (
-            f'DRIVER={{ODBC Driver 17 for SQL Server}};'
-            f'SERVER={server};DATABASE={database};'
-            f'Trusted_Connection=yes;'  # Используем текущую Windows-учетку
-            f'TrustServerCertificate=yes;'  # Игнорируем ошибки сертификатов
-        )
+app.config['SQLALCHEMY_DATABASE_URI'] = conn_str
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-    return pyodbc.connect(conn_str)
+db = SQLAlchemy(app)
 
 
+# --- МОДЕЛЬ (ОПИСАНИЕ ТАБЛИЦЫ В КОДЕ) ---
+class Order(db.Model):
+    __tablename__ = 'orders'
+
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(db.Integer, nullable=False)
+    customer_id = db.Column(db.Integer, nullable=False)
+    quantity = db.Column(db.Integer, nullable=False)
+    # Мы добавим новое поле позже, в миграции №2
+    status = db.Column(db.String(50), default="New")
+
+
+# --- РОУТЫ ---
 @app.route('/orders', methods=['GET'])
 def get_orders():
     """
-    Получить список всех заказов
+    Получить список заказов
     ---
     responses:
       200:
-        description: Список заказов
+        description: Список
     """
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, product_id, customer_id, quantity FROM Orders')
-    rows = cursor.fetchall()
-    # Превращаем строки БД в красивый JSON
-    orders = [{"id": r.id, "product_id": r.product_id, "customer_id": r.customer_id, "quantity": r.quantity} for r in
-              rows]
-    conn.close()
-    return jsonify(orders)
+    orders = Order.query.all()
+    return jsonify([{
+        "id": o.id, "product_id": o.product_id,
+        "customer_id": o.customer_id, "quantity": o.quantity
+    } for o in orders])
 
 
 @app.route('/orders', methods=['POST'])
 def create_order():
     """
-    Создать новый заказ
+    Создать заказ
     ---
     parameters:
       - name: body
         in: body
-        required: true
         schema:
           type: object
           properties:
@@ -77,19 +76,19 @@ def create_order():
             quantity: {type: integer}
     responses:
       201:
-        description: Заказ создан
+        description: Created
     """
-    new_order = request.json
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    query = "INSERT INTO Orders (product_id, customer_id, quantity) OUTPUT INSERTED.id VALUES (?, ?, ?)"
-    cursor.execute(query, (new_order['product_id'], new_order['customer_id'], new_order['quantity']))
-    new_id = cursor.fetchone()[0]
-    conn.commit()
-    conn.close()
-    new_order['id'] = new_id
-    return jsonify(new_order), 201
+    data = request.json
+    new_order = Order(
+        product_id=data['product_id'],
+        customer_id=data['customer_id'],
+        quantity=data['quantity']
+    )
+    db.session.add(new_order)
+    db.session.commit()
+    return jsonify({"id": new_order.id, "message": "Order created"}), 201
 
 
 if __name__ == '__main__':
     app.run(port=5002, debug=True)
+

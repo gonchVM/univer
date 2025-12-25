@@ -12,7 +12,7 @@ on:
     branches: ["main"]
 
 jobs:
-  # --- РАБОТА 1: ТЕСТИРОВАНИЕ ---
+  # --- РАБОТА 1: ТЕСТИРОВАНИЕ (Как в прошлой работе) ---
   tests:
     runs-on: ubuntu-22.04
     services:
@@ -26,11 +26,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      # Установка драйверов с авто-определением версии Ubuntu
       - name: Install ODBC & Python
         run: |
           curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
-          curl https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list | sudo tee /etc/apt/sources.list.d/msprod.list
+          curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list | sudo tee /etc/apt/sources.list.d/msprod.list
           sudo apt-get update
           sudo ACCEPT_EULA=Y apt-get install -y msodbcsql17 unixodbc-dev
 
@@ -40,28 +39,39 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      # Инициализация БД
-      - name: Wait & Init DB
-        run: |
-          sleep 15
-          /opt/mssql-tools/bin/sqlcmd -S 127.0.0.1 -U sa -P TestPass123! -Q "CREATE DATABASE MicroshopGVM"
-          /opt/mssql-tools/bin/sqlcmd -S 127.0.0.1 -d MicroshopGVM -U sa -P TestPass123! -Q "CREATE TABLE Orders (id INT PRIMARY KEY IDENTITY(1,1), product_id INT, customer_id INT, quantity INT)"
+      - name: Wait for SQL Server
+        run: sleep 15
 
-      # Запуск тестов с передачей секретов
+      # Сначала создаем пустую базу (контейнер БД)
+      - name: Create Empty Database
+        run: |
+          /opt/mssql-tools/bin/sqlcmd -S 127.0.0.1 -U sa -P TestPass123! -Q "CREATE DATABASE MicroshopGVM"
+          /opt/mssql-tools/bin/sqlcmd -S 127.0.0.1 -d MicroshopGVM -U sa -P TestPass123! -Q "CREATE TABLE orders (id INT PRIMARY KEY IDENTITY(1,1), product_id INT, customer_id INT, quantity INT, status STRING)"
+
+      # А ТЕПЕРЬ МАГИЯ: Накатываем структуру через Alembic!
+      # Робот сам создаст таблицы по вашим миграциям.
+      - name: Run Migrations
+        env:
+          DB_SERVER: 127.0.0.1
+          DB_DATABASE: MicroshopGVM
+          DB_USER: sa
+          DB_PASSWORD: TestPass123!
+        run: alembic upgrade head
+
       - name: Run Tests
         env:
           DB_SERVER: 127.0.0.1
           DB_DATABASE: MicroshopGVM
           DB_USER: sa
           DB_PASSWORD: TestPass123!
-        run: pytest tests/
+        run: pytest test_products.py test_integration.py
 
-  # --- РАБОТА 2: СБОРКА И РЕЛИЗ ---
+
+  # --- РАБОТА 2: СБОРКА И РЕЛИЗ (Новая часть) ---
   build-and-release:
     needs: tests  # Ждем, пока пройдут тесты!
     runs-on: ubuntu-latest
-    # Запускать этот блок ТОЛЬКО если это тег версии (например, v1.0)
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v')  # Запускать ТОЛЬКО если это тег версии
 
     steps:
       - uses: actions/checkout@v3
@@ -71,16 +81,15 @@ jobs:
         with:
           python-version: "3.9"
 
-      # 1. Запускаем ваш Python-скрипт сборки
-      - name: Build Package
+      # 1. Запускаем наш скрипт упаковки
+      - name: Build Package (Zip)
         run: python build_package.py
 
-      # 2. Создаем Релиз на GitHub и прикрепляем ZIP gfgd
-      - name: Create Release
+      # 2. Создаем Релиз на GitHub
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
         with:
-          # Ищем любой ZIP файл, начинающийся с microshop_release_
-          files: microshop_release_*.zip
+          files: |
+            *.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
